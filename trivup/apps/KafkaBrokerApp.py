@@ -41,6 +41,7 @@ import time
 class KafkaBrokerApp (trivup.App):
     """ Kafka broker app
         Depends on ZookeeperApp (unless KRaft mode) """
+                
     def __init__(self, cluster, conf=None, on=None):
         """
         @param cluster     Current cluster
@@ -73,6 +74,7 @@ class KafkaBrokerApp (trivup.App):
            * fdlimit - RLIMIT_NOFILE (or "max") (default: max)
            * conf - arbitary server.properties config as a list of strings.
            * realm - Kerberos realm to use when sasl_mechanisms contains GSSAPI
+           *
         """
         super(KafkaBrokerApp, self).__init__(cluster, conf=conf, on=on)
 
@@ -171,6 +173,7 @@ class KafkaBrokerApp (trivup.App):
 
         conf_blob.append(listener_map)
 
+        
         def sort_listener(a):
             """ Sort listener_types list so that the PLAINTEXTs are first,
                 since the first listener is used by operational(). """
@@ -178,12 +181,19 @@ class KafkaBrokerApp (trivup.App):
                 return 0
             else:
                 return 1
-
-        # Allocate a port for each listener type
-        ports = [(x, trivup.TcpPortAllocator(self.cluster).next(
+            
+        # If brokers ports are specified those would be used, if not it would fallback to TcpPortAllocator logic
+        if 'user_port' in self.conf and self.conf['user_port']:
+            ports = [(x, self.conf.get('user_port')) for x in sorted(set(listener_types), key=sort_listener)]
+            self.conf['port'] = self.conf.get('user_port') 
+            self.conf['address'] = '%s:%d' % (listener_host, self.conf.get('user_port'))
+        else :
+            ports = [(x, trivup.TcpPortAllocator(self.cluster).next(
             self, self.conf.get('port_base', self.conf.get('port', None))))
                  for x in sorted(set(listener_types), key=sort_listener)]
-        self.conf['port'] = ports[0][1]  # "Default" port
+            self.conf['port'] = ports[0][1]  # "Default" port
+            self.conf['address'] = '%s:%d' % (listener_host, self.conf['port'])
+
 
         if can_docker:
             # Add docker listener to allow services (e.g, SchemaRegistry) in
@@ -191,7 +201,6 @@ class KafkaBrokerApp (trivup.App):
             docker_port = trivup.TcpPortAllocator(self.cluster).next(self)
             docker_host = '%s:%d' % (cluster.get_docker_host(), docker_port)
 
-        self.conf['address'] = '%s:%d' % (listener_host, self.conf['port'])
         # Create a listener for each port
         listeners = ['%s://%s:%d' % (x[0], "0.0.0.0", x[1]) for x in ports]
         if can_docker:

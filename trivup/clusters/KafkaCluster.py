@@ -64,9 +64,10 @@ import sys
 import argparse
 import subprocess
 import copy
-
+import socket
 
 class KafkaCluster(object):
+    
     # conf dict structure with defaults:
     # commented-out fields are not defaults but show what is available.
     default_conf = {
@@ -92,8 +93,10 @@ class KafkaCluster(object):
         'oidc': False,
         # Additional broker server.properties configuration
         # 'broker_conf': ['connections.max.idle.ms=1234', ..]
+        # 'broker_ports' : Comma-separated list of Kafka broker ports. If not provided, random ports will be used.
     }
 
+    
     def __init__(self, **kwargs):
         """ Create and start a KafkaCluster.
             See default_conf above for parameters. """
@@ -107,6 +110,27 @@ class KafkaCluster(object):
         self.version = self.conf.get('version')
         self.version_num = [int(x) for x in self.version.split('.')][:3]
         self.kraft = self.conf.get('kraft')
+
+         
+        # Checking if ports being passed are available
+        if 'broker_ports' in conf and conf['broker_ports']:
+            self.broker_ports_list = [int(port) for port in conf.get('broker_ports').split(',')]
+            self._check_ports_availability()
+        else:
+            self.broker_ports_list = []
+
+        # Scenario where no. of ports being passed doesn't match broker count
+        if 'broker_cnt' in conf and conf['broker_cnt'] and 'broker_ports' in conf and conf['broker_ports']:
+            if len(self.broker_ports_list) != self.conf.get('broker_cnt'):
+                raise ValueError(f"The number of ports :({len(self.broker_ports_list)}) does not match broker_cnt : ({conf['broker_cnt']}).")
+        else:
+            if 'broker_ports' in conf and conf['broker_ports']:
+                self.conf['broker_cnt'] = len(self.broker_ports_list)
+
+        # Broker count's default value has been set to None so has to be overwritten
+        if 'broker_cnt' not in self.conf or not self.conf['broker_cnt']:
+            self.conf['broker_cnt'] = self.default_conf.get('broker_cnt')
+
 
         # Create trivup Cluster
         self.cluster = Cluster(
@@ -173,6 +197,9 @@ class KafkaCluster(object):
         self.brokers = dict()
         for n in range(0, broker_cnt):
             bconf = copy.deepcopy(self.broker_conf)
+            if self.broker_ports_list:
+                bconf['user_port'] = self.broker_ports_list[n]
+            
             if self.version_num >= [2, 4, 0]:
                 # Configure rack & replica selector if broker supports
                 # fetch-from-follower
@@ -438,7 +465,8 @@ class KafkaCluster(object):
                 retcode, fullcmd))
 
         return retcode
-
+    
+    
     def client_conf(self):
         """ Get a dict copy of the client configuration """
         return deepcopy(self._client_conf)
@@ -451,7 +479,37 @@ class KafkaCluster(object):
             if additional_blob is not None:
                 f.write(str('#\n# Additional configuration:'))
                 f.write(str(additional_blob))
+    
 
+    def _check_ports_availability(self):
+        """ Check availability of the broker ports and exit if any are unavailable. """
+        unavailable_ports = []
+
+        for port in self.broker_ports_list:
+            if not self._is_port_available(port):
+                unavailable_ports.append(port)
+
+        if unavailable_ports:
+            print(f"Error: The following broker ports are unavailable: {', '.join(map(str, unavailable_ports))}")
+            print("Closing application due to unavailable ports.")
+            sys.exit(1)  
+
+        print(f"All broker ports are available: {', '.join(map(str, self.broker_ports_list))}")
+
+
+    def _is_port_available(self, port):
+        """ Check if a port is available by trying to bind to it. """
+        s = None
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind(('', port)) 
+            return True  
+        except socket.error:
+            return False  
+        finally:
+            if s:
+                s.close()
+    
 
 if __name__ == '__main__':
 
@@ -472,7 +530,7 @@ if __name__ == '__main__':
                         default=KafkaCluster.default_conf['with_sr'],
                         help='Enable SchemaRegistry')
     parser.add_argument('--brokers', dest='broker_cnt', type=int,
-                        default=KafkaCluster.default_conf['broker_cnt'],
+                        default=None,
                         help='Number of Kafka brokers')
     parser.add_argument('--version', dest='version', type=str,
                         default=KafkaCluster.default_conf['version'],
@@ -494,6 +552,9 @@ if __name__ == '__main__':
                         action='store_true',
                         default=KafkaCluster.default_conf['oidc'],
                         help='Enable Oauthbearer OIDC JWT server')
+    parser.add_argument('--broker-ports', dest='broker_ports', type=str, default=None,
+                        help='Comma-separated list of Kafka broker ports. If not provided, default ports will be used.')
+
 
     args = parser.parse_args()
 
@@ -507,7 +568,9 @@ if __name__ == '__main__':
             'broker_cnt': args.broker_cnt,
             'kafka_path': args.kafka_src,
             'cleanup': not args.no_cleanup,
-            'oidc': args.oidc}
+            'oidc': args.oidc,
+            'broker_ports': args.broker_ports
+            }
 
     kc = KafkaCluster(**conf)
 
