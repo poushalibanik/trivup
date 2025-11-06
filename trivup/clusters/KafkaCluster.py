@@ -8,11 +8,11 @@
 # modification, are permitted provided that the following conditions are met:
 #
 # * Redistributions of source code must retain the above copyright notice, this
-#   list of conditions and the following disclaimer.
+#   list of conditions and the following disclaimer.
 #
 # * Redistributions in binary form must reproduce the above copyright notice,
-#   this list of conditions and the following disclaimer in the documentation
-#   and/or other materials provided with the distribution.
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
 #
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 # AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -28,24 +28,24 @@
 
 
 # Provides a Kafka cluster with the following components:
-#  * ZooKeeperApp (1)
-#  * KafkaBrokerApp brokers (broker_cnt=3)
-#  * SslApp (optional, if with_ssl=True)
-#  * KerberosKdcApp (optional, sasl.mechanism=GSSAPI,
-#                    cross-realm if realm_cnt=2)
-#  * SchemaRegistryApp (optional, if with_sr=True)
-#  * OauthbearerOIDCApp (optional, if oidc=True)
+#  * ZooKeeperApp (1)
+#  * KafkaBrokerApp brokers (broker_cnt=3)
+#  * SslApp (optional, if with_ssl=True)
+#  * KerberosKdcApp (optional, sasl.mechanism=GSSAPI,
+#                     cross-realm if realm_cnt=2)
+#  * SchemaRegistryApp (optional, if with_sr=True)
+#  * OauthbearerOIDCApp (optional, if oidc=True)
 #
 # cluster.env (dict) will contain:
-#      TRIVUP_ROOT
-#      ZK_ADDRESS  (unless --kraft)
-#      BROKERS
-#      BROKER_PID_<nodeid>
-#      KAFKA_PATH  (path to kafka package root directory)
-#      SR_URL      (if with_sr)
-#      SSL_(ca|pub|priv)_.. (if with_ssl, paths to certs and keys)
-#      SSL_password         (if with_ssl, key password)
-#      KRB5CCNAME, KRB5_COFNIG, KRB5_KDC_PROFILE (if GSSAPI enabled)
+#      TRIVUP_ROOT
+#      ZK_ADDRESS  (unless --kraft)
+#      BROKERS
+#      BROKER_PID_<nodeid>
+#      KAFKA_PATH  (path to kafka package root directory)
+#      SR_URL      (if with_sr)
+#      SSL_(ca|pub|priv)_.. (if with_ssl, paths to certs and keys)
+#      SSL_password          (if with_ssl, key password)
+#      KRB5CCNAME, KRB5_COFNIG, KRB5_KDC_PROFILE (if GSSAPI enabled)
 #
 # See conf dict structure below.
 
@@ -65,15 +65,16 @@ import argparse
 import subprocess
 import copy
 import socket
+import urllib.parse;
 
 class KafkaCluster(object):
-    
+
     # conf dict structure with defaults:
     # commented-out fields are not defaults but show what is available.
     default_conf = {
         'version': '2.8.0',     # Apache Kafka version
         'cp_version': '6.1.0',  # Confluent Platform version (for SR)
-        'broker_cnt': 3,
+        'broker_cnt': 1,
         'sasl_mechanism': '',   # GSSAPI, PLAIN, SCRAM-.., ...
         'realm_cnt': 1,
         'krb_renew_lifetime': 30,
@@ -94,9 +95,10 @@ class KafkaCluster(object):
         # Additional broker server.properties configuration
         # 'broker_conf': ['connections.max.idle.ms=1234', ..]
         # 'broker_ports' : Comma-separated list of Kafka broker ports. If not provided, random ports will be used.
+        # 'd' : Runs the trivup in the background and returns the main process ID along with broker port and schema port.
     }
 
-    
+
     def __init__(self, **kwargs):
         """ Create and start a KafkaCluster.
             See default_conf above for parameters. """
@@ -111,7 +113,7 @@ class KafkaCluster(object):
         self.version_num = [int(x) for x in self.version.split('.')][:3]
         self.kraft = self.conf.get('kraft')
 
-         
+
         # Checking if ports being passed are available
         if 'broker_ports' in conf and conf['broker_ports']:
             self.broker_ports_list = [int(port) for port in conf.get('broker_ports').split(',')]
@@ -199,7 +201,7 @@ class KafkaCluster(object):
             bconf = copy.deepcopy(self.broker_conf)
             if self.broker_ports_list:
                 bconf['user_port'] = self.broker_ports_list[n]
-            
+
             if self.version_num >= [2, 4, 0]:
                 # Configure rack & replica selector if broker supports
                 # fetch-from-follower
@@ -238,7 +240,15 @@ class KafkaCluster(object):
 
     def __del__(self):
         """ Destructor: forcibly stop the cluster """
-        self.stop(force=True)
+        # Only stop if cleanup is enabled. Otherwise, assume the user handles it.
+        # This try/except prevents the TypeError/AttributeError if self.conf is cleared by interpreter on exit.
+        try:
+            if self.conf.get('cleanup', True):
+                self.stop(force=True)
+        except AttributeError:
+             # Ignore the error that happens when attributes are already gone (e.g., in daemon mode)
+             pass
+
 
     def _setup_env(self):
         """ Set up convenience envs """
@@ -391,6 +401,7 @@ class KafkaCluster(object):
         if timeout > 0:
             self.cluster.wait_stopped(timeout)
         if cleanup:
+            # self.cluster.cleanup is a method, not a boolean, this is correct.
             self.cluster.cleanup(keeptypes)
 
     def stopped(self):
@@ -431,7 +442,7 @@ class KafkaCluster(object):
 
         print("# - Waiting for cluster to go operational in {}/{}".format(
             self.cluster.root_path, self.cluster.instance))
-        kc.wait_operational()
+        self.wait_operational()
 
         env = self.env.copy()
 
@@ -465,8 +476,8 @@ class KafkaCluster(object):
                 retcode, fullcmd))
 
         return retcode
-    
-    
+
+
     def client_conf(self):
         """ Get a dict copy of the client configuration """
         return deepcopy(self._client_conf)
@@ -479,7 +490,7 @@ class KafkaCluster(object):
             if additional_blob is not None:
                 f.write(str('#\n# Additional configuration:'))
                 f.write(str(additional_blob))
-    
+
 
     def _check_ports_availability(self):
         """ Check availability of the broker ports and exit if any are unavailable. """
@@ -492,7 +503,7 @@ class KafkaCluster(object):
         if unavailable_ports:
             print(f"Error: The following broker ports are unavailable: {', '.join(map(str, unavailable_ports))}")
             print("Closing application due to unavailable ports.")
-            sys.exit(1)  
+            sys.exit(1)
 
         print(f"All broker ports are available: {', '.join(map(str, self.broker_ports_list))}")
 
@@ -502,14 +513,14 @@ class KafkaCluster(object):
         s = None
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.bind(('', port)) 
-            return True  
+            s.bind(('', port))
+            return True
         except socket.error:
-            return False  
+            return False
         finally:
             if s:
                 s.close()
-    
+
 
 if __name__ == '__main__':
 
@@ -554,6 +565,9 @@ if __name__ == '__main__':
                         help='Enable Oauthbearer OIDC JWT server')
     parser.add_argument('--broker-ports', dest='broker_ports', type=str, default=None,
                         help='Comma-separated list of Kafka broker ports. If not provided, default ports will be used.')
+    parser.add_argument('--d', dest='d', action='store_true',
+                        help='Runs the trivup in the background and returns the main process ID along with broker port and schema port')
+
 
 
     args = parser.parse_args()
@@ -569,11 +583,77 @@ if __name__ == '__main__':
             'kafka_path': args.kafka_src,
             'cleanup': not args.no_cleanup,
             'oidc': args.oidc,
-            'broker_ports': args.broker_ports
+            'broker_ports': args.broker_ports,
+            'd': args.d 
             }
 
     kc = KafkaCluster(**conf)
 
+    if args.d:
+        # Disabling cleanup via the configuration dictionary
+        kc.conf['cleanup'] = False
+
+        # Wait for the cluster to be fully operational.
+        print("# Waiting for cluster to go operational...")
+        try:
+             # Increased timeout for Schema Registry
+             kc.wait_operational(timeout=180)
+        except Exception:
+             print("FATAL ERROR: Cluster failed to become operational.")
+             sys.exit(1)
+
+        # Getting SR Listener
+        sr_listeners = None
+        sr_app = None 
+
+        # Checking if Schema Registry was requested and started
+        sr_apps = kc.cluster.find_apps(SchemaRegistryApp, 'started')
+
+        if sr_apps:
+            # Getting the running Schema Registry App instance
+            sr_app = sr_apps[0]
+
+            # ACCESS THE CORRECT VARIABLE: 'url' from the configuration dictionary
+            sr_listeners = sr_app.conf.get('url')
+
+            # HOSTNAME EXTRACTION
+            # Parsing the bootstrap server string to get the netloc (host:port)
+            parsed_broker = urllib.parse.urlparse(kc.bootstrap_servers)
+
+            # Extract the hostname
+            if parsed_broker.netloc:
+                host = parsed_broker.netloc.split(':')[0]
+            else:
+                host = parsed_broker.path.split(':')[0]
+
+            # APPLYING THE HOSTNAME TO THE SR LISTENER
+            # Only run replacement if the SR listener URL was successfully retrieved
+            if sr_listeners is not None:
+                if 'localhost' in sr_listeners or '0.0.0.0' in sr_listeners:
+                     sr_listeners = sr_listeners.replace('localhost', host).replace('0.0.0.0', host)
+
+
+        # Robustly getting the first running broker
+        running_brokers = kc.cluster.find_apps(KafkaBrokerApp, 'started')
+
+        if running_brokers and running_brokers[0].proc:
+            pid = running_brokers[0].proc.pid
+
+            print(f"Bootstrap Servers: {kc.bootstrap_servers}")
+
+            # Printing the Schema Registry port only if it was successfully found
+            if sr_listeners:
+                 print(f"Schema Registry port: {sr_listeners}")
+
+            # Output the PID and exit immediately, leaving the subprocesses running.
+            print(f"Cluster started in background. Main broker PID: {pid}")
+            # Exit cleanly
+            sys.exit(0)
+        else:
+            print("ERROR: Cluster started, but could not find main broker PID.")
+            sys.exit(1)
+
+    # Normal interactive mode / Command execution
     ret = kc.interactive(args.cmd)
 
     print("# Stopping cluster in {}/{}".format(kc.cluster.root_path,

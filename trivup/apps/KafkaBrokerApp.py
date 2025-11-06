@@ -207,7 +207,8 @@ class KafkaBrokerApp (trivup.App):
             listeners.append('%s://%s:%d' % ('DOCKER', "0.0.0.0", docker_port))
         self.conf['listeners'] = ','.join(listeners)
         if 'advertised_hostname' not in self.conf:
-            self.conf['advertised_hostname'] = self.conf['nodename']
+            # self.conf['advertised_hostname'] = self.conf['nodename']
+            self.conf['advertised_hostname'] = socket.gethostname()+ ".hursley.ibm.com"
         advertised_listeners = ['%s://%s:%d' %
                                 (x[0], self.conf['advertised_hostname'], x[1])
                                 for x in ports if x[0] != 'CONTROLLER']
