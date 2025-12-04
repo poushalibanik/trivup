@@ -37,7 +37,6 @@ import os
 import socket
 import time
 
-
 class KafkaBrokerApp (trivup.App):
     """ Kafka broker app
         Depends on ZookeeperApp (unless KRaft mode) """
@@ -208,7 +207,27 @@ class KafkaBrokerApp (trivup.App):
         self.conf['listeners'] = ','.join(listeners)
         if 'advertised_hostname' not in self.conf:
             # self.conf['advertised_hostname'] = self.conf['nodename']
-            self.conf['advertised_hostname'] = socket.gethostname()+ ".hursley.ibm.com"
+        
+            def get_fqdn_from_resolvconf():
+                domain = None
+                with open("/etc/resolv.conf") as f:
+                    for line in f:
+                        if line.startswith("search") or line.startswith("domain"):
+                            parts = line.split()
+                            if len(parts) > 1:
+                                domain = parts[1]
+                                break
+                
+                hostname = socket.gethostname()
+
+                if domain:
+                    return f"{hostname}.{domain}"
+                else:
+                    return hostname   
+
+
+            fqdn = get_fqdn_from_resolvconf()
+            self.conf['advertised_hostname'] = fqdn
         advertised_listeners = ['%s://%s:%d' %
                                 (x[0], self.conf['advertised_hostname'], x[1])
                                 for x in ports if x[0] != 'CONTROLLER']
