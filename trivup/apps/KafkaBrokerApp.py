@@ -225,7 +225,6 @@ class KafkaBrokerApp (trivup.App):
                 else:
                     return hostname   
 
-
             fqdn = get_fqdn_from_resolvconf()
             self.conf['advertised_hostname'] = fqdn
         advertised_listeners = ['%s://%s:%d' %
